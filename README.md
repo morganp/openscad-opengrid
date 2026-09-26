@@ -324,6 +324,16 @@ numbers, and are worth a look if you want a different feature set:
 - [mitufy/opengrid-projects](https://github.com/mitufy/opengrid-projects) (CC BY 4.0 / CC BY-SA 4.0)
 - [jp-embedded/opengrid](https://github.com/jp-embedded/opengrid) (GPL-3.0)
 
+`opengrid_bin()` is inspired by two community projects. It is a fresh
+implementation on this library's own snaps and contains none of their code:
+
+- **Customizable openGrid Bins** by **Mikey Ward** ([@wookiee](https://makerworld.com/en/@wookiee)),
+  CC BY-SA 4.0: <https://makerworld.com/en/models/1813759-customizable-opengrid-bins>.
+  The bin shape, chamfered lip and divider options follow this design.
+- **openGrid Tile Generator** by **BlackjackDuck (Andy)**
+  ([MakerWorld](https://makerworld.com/en/@BlackjackDuck), part of QuackWorks above),
+  CC BY-NC-SA 4.0. Use it to print the boards these bins mount on.
+
 This library is MIT licensed. See [LICENSE](LICENSE).
 
 ## Versioning
