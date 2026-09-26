@@ -9,12 +9,18 @@
  *   opengrid_snap_grid(cols, rows, lite) -- snaps at every cell of a cols x rows patch
  *   opengrid_tile(cols, rows, lite)      -- test-fit board tile, front face on z = 0
  *   opengrid_cell_void(lite)             -- the negative space of one cell opening
+ *   opengrid_bin(cols, depth, height)    -- open top bin with snaps on its back wall
  *
  * Public functions:
  *   og_thickness(lite)                   -- board thickness for the variant
  *   og_snap_depth(lite)                  -- how far a snap reaches into the board
  *   og_grid_positions(cols, rows)        -- [x, y] cell centres, patch centred on origin
  *   og_span(n)                           -- outer size of n cells
+ *   og_bin_width(cols, clearance)        -- outer width of a bin covering cols cells
+ *   og_cols_for(mm), og_cols_for_inner(mm, wall)
+ *                                        -- fewest cols for an outer or inner width
+ *   og_bin_rows(height)                  -- full grid rows a bin height covers
+ *   og_bin_snap_positions(cols, height)  -- [x, y] snap centres on a bin back
  *
  * Coordinate convention: z = 0 is the front face of the board. Product geometry
  * lives at z >= 0, snap geometry at z <= 0. Depth d below is measured from the
@@ -307,4 +313,168 @@ module opengrid_snaps(positions, lite = false, nubs = true, corner_clearance = 0
 module opengrid_snap_grid(cols = 1, rows = 1, lite = false, nubs = true,
                           corner_clearance = 0) {
     opengrid_snaps(og_grid_positions(cols, rows), lite, nubs, corner_clearance);
+}
+
+// ---------------------------------------------------------------------------
+// Bin
+// ---------------------------------------------------------------------------
+
+OG_BIN_CLEARANCE = 0.5;  // default gap left between neighbouring bins
+
+/*
+ * og_bin_width -- outer width of a bin that occupies `cols` grid columns
+ */
+function og_bin_width(cols, clearance = OG_BIN_CLEARANCE) =
+    og_span(cols) - clearance;
+
+/*
+ * og_cols_for -- fewest columns whose bin is at least `mm` wide outside
+ */
+function og_cols_for(mm, clearance = OG_BIN_CLEARANCE) =
+    max(1, ceil((mm + clearance) / OG_PITCH));
+
+/*
+ * og_cols_for_inner -- fewest columns whose bin is at least `mm` wide inside
+ */
+function og_cols_for_inner(mm, wall = 2, clearance = OG_BIN_CLEARANCE) =
+    og_cols_for(mm + 2 * wall, clearance);
+
+/*
+ * og_bin_rows -- how many full grid rows a bin of this height covers.
+ * Each snap needs a full row, counted down from the top grid line.
+ */
+function og_bin_rows(height) = floor(height / OG_PITCH);
+
+/*
+ * og_bin_snap_cols -- column indices that carry a snap
+ *
+ * Spreads snaps at most `spacing` columns apart, always using both end
+ * columns, and keeps the pattern mirror symmetric. An even width has no
+ * centre column, so it needs an even snap count; when the natural count is
+ * odd it drops one snap rather than adding one, since fewer snaps are easier
+ * to seat.
+ */
+function og_bin_snap_cols(cols, spacing = 2) =
+    cols == 1 ? [0] :
+    let(
+        n0 = ceil((cols - 1) / max(1, spacing)) + 1,
+        n  = (cols % 2 == 0 && n0 % 2 == 1) ? n0 - 1 : n0,
+        f  = (cols - 1) / (n - 1)
+    )
+    [ for (i = [0 : n - 1])
+        i <= (n - 1) / 2 ? round(i * f) : (cols - 1) - round((n - 1 - i) * f) ];
+
+/*
+ * og_bin_snap_row_list -- row indices, counted down from the top, that carry snaps
+ */
+function og_bin_snap_row_list(height, snap_rows = "top") =
+    let(r = og_bin_rows(height))
+    snap_rows == "all"  ? [ for (k = [0 : r - 1]) k ] :
+    snap_rows == "ends" ? (r > 1 ? [0, r - 1] : [0]) :
+    [0];
+
+/*
+ * og_bin_snap_positions -- [x, y] snap centres in bin coordinates
+ *
+ * x = 14 + 28 * column from the left grid line, y = 14 + 28 * row down from
+ * the top grid line. Both always land on a board cell centre.
+ */
+function og_bin_snap_positions(cols, height, spacing = 2, snap_rows = "top",
+                               snap_cols = undef) =
+    let(cs = is_undef(snap_cols) ? og_bin_snap_cols(cols, spacing) : snap_cols)
+    [ for (k = og_bin_snap_row_list(height, snap_rows), c = cs)
+        [ OG_PITCH / 2 + c * OG_PITCH, height - OG_PITCH / 2 - k * OG_PITCH ] ];
+
+/*
+ * og_chamfered_box -- box from [x0, y0, z0] to [x1, y1, z1] with 45 degree
+ * chamfers of size c on the four edges at z = z1 that are not on y = y1,
+ * plus the three front corners. Hull of two boxes, so no epsilon seams.
+ */
+module og_chamfered_box(x0, x1, y0, y1, z0, z1, c) {
+    hull() {
+        translate([x0, y0, z0]) cube([x1 - x0, y1 - y0, z1 - z0 - c]);
+        translate([x0 + c, y0 + c, z0]) cube([x1 - x0 - 2 * c, y1 - y0 - c, z1 - z0]);
+    }
+}
+
+/*
+ * opengrid_bin -- an open top bin that hangs on the board
+ *
+ *   cols            -- grid columns covered, width is og_bin_width(cols)
+ *   depth           -- how far the bin stands out from the board face
+ *   height          -- grid height, top edge on a grid line. >= 28, use a
+ *                      multiple of 28 if you want to stack bins
+ *   wall, floor     -- shell thicknesses
+ *   divisions_x     -- compartments across the width
+ *   divisions_y     -- compartments front to back
+ *   divider         -- divider thickness
+ *   chamfer         -- outer chamfer on the front and bottom front edges
+ *   inner_chamfer   -- chamfer inside along the floor and the inside corners
+ *   clearance       -- total gap shared between a bin and its neighbours
+ *   snap_spacing    -- largest column step between snaps, 2 = every other cell
+ *   snap_rows       -- "top", "ends" (top and bottom full rows) or "all"
+ *   snap_cols       -- explicit list of snap columns, overrides snap_spacing
+ *   lite, nubs, corner_clearance -- passed to opengrid_snap()
+ *
+ * Coordinates follow the library convention: z = 0 is the board face and the
+ * bin stands out in +z. x runs across the width from the left grid line at
+ * x = 0, y runs up the board from y = 0 with the top grid line at y = height.
+ * So placing the bin at a board corner puts every snap in a cell.
+ */
+module opengrid_bin(cols = 3, depth = 40, height = 28,
+                    wall = 2, floor = 2,
+                    divisions_x = 1, divisions_y = 1, divider = 1.6,
+                    chamfer = 3, inner_chamfer = 2,
+                    clearance = OG_BIN_CLEARANCE,
+                    snap_spacing = 2, snap_rows = "top", snap_cols = undef,
+                    lite = false, nubs = true, corner_clearance = 0) {
+    assert(cols >= 1, "opengrid_bin: cols must be at least 1");
+    assert(height >= OG_PITCH, "opengrid_bin: height must be at least 28 so a snap fits a full cell");
+    assert(depth > 2 * wall + 2 * inner_chamfer, "opengrid_bin: depth too small for the walls");
+
+    x0 = clearance / 2;
+    x1 = og_span(cols) - clearance / 2;
+    y0 = clearance / 2;
+    y1 = height - clearance / 2;
+
+    // inner cavity
+    ix0 = x0 + wall;
+    ix1 = x1 - wall;
+    iz0 = wall;
+    iz1 = depth - wall;
+    iy0 = y0 + floor;
+
+    union() {
+        difference() {
+            og_chamfered_box(x0, x1, y0, y1, 0, depth, chamfer);
+
+            hull() {
+                translate([ix0, iy0 + inner_chamfer, iz0])
+                    cube([ix1 - ix0, y1 - iy0, iz1 - iz0]);
+                translate([ix0 + inner_chamfer, iy0, iz0 + inner_chamfer])
+                    cube([ix1 - ix0 - 2 * inner_chamfer, y1 - iy0 + 1,
+                          iz1 - iz0 - 2 * inner_chamfer]);
+            }
+        }
+
+        // dividers across the width
+        if (divisions_x > 1) {
+            pitch_x = (ix1 - ix0 + divider) / divisions_x;
+            for (k = [1 : divisions_x - 1])
+                translate([ix0 + k * pitch_x - divider, iy0 - EPS, iz0 - EPS])
+                    cube([divider, y1 - iy0 + EPS, iz1 - iz0 + 2 * EPS]);
+        }
+
+        // dividers front to back
+        if (divisions_y > 1) {
+            pitch_z = (iz1 - iz0 + divider) / divisions_y;
+            for (k = [1 : divisions_y - 1])
+                translate([ix0 - EPS, iy0 - EPS, iz0 + k * pitch_z - divider])
+                    cube([ix1 - ix0 + 2 * EPS, y1 - iy0 + EPS, divider]);
+        }
+
+        opengrid_snaps(og_bin_snap_positions(cols, height, snap_spacing,
+                                             snap_rows, snap_cols),
+                       lite, nubs, corner_clearance);
+    }
 }

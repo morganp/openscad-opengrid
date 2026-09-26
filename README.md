@@ -3,8 +3,9 @@
 Reusable OpenSCAD library for building [openGrid](https://www.opengrid.world/) compatible
 accessories. Pure OpenSCAD primitives, no external dependencies.
 
-It gives you the snap connector and a test tile, so any product you design can be
-mounted to an openGrid board without re-deriving the interface geometry each time.
+It gives you the snap connector, a test tile and a ready made bin, so any product you
+design can be mounted to an openGrid board without re-deriving the interface geometry
+each time.
 
 ```scad
 include <opengrid.scad>
@@ -74,6 +75,90 @@ snap tolerances before committing to a big part.
 The negative space of one cell opening. Difference this out of your own slab if
 you want to make boards rather than accessories.
 
+### `opengrid_bin(cols, depth, height, ...)`
+
+An open top bin with snaps on its back wall. Width is set in grid columns, so
+bins always land on the grid.
+
+```scad
+include <opengrid.scad>
+
+opengrid_bin(cols = 3, depth = 40, height = 56, divisions_x = 2, snap_rows = "ends");
+```
+
+| Parameter | Default | Description |
+|---|---|---|
+| `cols` | `3` | Grid columns covered. Outer width is `og_bin_width(cols)` |
+| `depth` | `40` | How far the bin stands out from the board |
+| `height` | `28` | Grid height, top edge on a grid line. At least 28; use a multiple of 28 to stack bins |
+| `wall` | `2` | Side, front and back wall thickness |
+| `floor` | `2` | Floor thickness |
+| `divisions_x` | `1` | Equal compartments across the width |
+| `divisions_y` | `1` | Equal compartments front to back |
+| `divider` | `1.6` | Divider thickness |
+| `chamfer` | `3` | Outer 45 degree chamfer on the front edges |
+| `inner_chamfer` | `2` | Inner chamfer along the floor and inside corners |
+| `clearance` | `0.5` | Total gap shared with the neighbouring bins, `0.25` each side |
+| `snap_spacing` | `2` | Largest column step between snaps. `2` is every other cell |
+| `snap_rows` | `"top"` | `"top"`, `"ends"` (top and bottom full rows) or `"all"` |
+| `snap_cols` | `undef` | Explicit list of snap columns, overrides `snap_spacing` |
+| `lite`, `nubs`, `corner_clearance` | | Passed through to `opengrid_snap()` |
+
+![Bin](images/opengrid_bin.png)
+
+*Left: a 3 column bin and a 4 column bin with three compartments, side by side on
+an 8 x 3 board. Right: a 2 column bin in its print orientation, snaps up.*
+
+**Coordinates.** Library convention: the back of the bin is on `z = 0` and it
+stands out in `+z`. The left grid line is `x = 0` and `y` runs up the board with
+the top grid line at `y = height`. Put the origin on a board corner and every
+snap is in a cell.
+
+**Snap pattern.** Snaps go in both end columns and are spread at most
+`snap_spacing` apart, mirror symmetric. An even width has no centre column, so it
+takes an even number of snaps.
+
+| cols | Snap columns (`snap_spacing = 2`) |
+|---|---|
+| 1 | 0 |
+| 2 | 0, 1 |
+| 3 | 0, 2 |
+| 4 | 0, 3 |
+| 5 | 0, 2, 4 |
+| 6 | 0, 2, 3, 5 |
+| 7 | 0, 2, 4, 6 |
+| 8 | 0, 2, 5, 7 |
+
+**Grid fit.** Every snap centre sits at `14 + 28 * n` from the bin's left grid
+line, for odd and even widths alike. So bins of any mix of widths butt together
+along a row with only the `clearance` gap between them, and all their snaps land
+in cells. Pick the width with `og_cols_for_inner()`:
+
+| cols | Outer width | Inner width (`wall = 2`) |
+|---|---|---|
+| 1 | 27.5 | 23.5 |
+| 2 | 55.5 | 51.5 |
+| 3 | 83.5 | 79.5 |
+| 4 | 111.5 | 107.5 |
+| 5 | 139.5 | 135.5 |
+| 6 | 167.5 | 163.5 |
+| 7 | 195.5 | 191.5 |
+| 8 | 223.5 | 219.5 |
+
+With dividers, each compartment is `(inner - (divisions_x - 1) * divider) / divisions_x`.
+
+**Printing.** Print the bin **front face down, snaps up**
+(`mirror([0, 0, 1]) opengrid_bin(...)`). The snaps then print exactly as
+designed, with every overhang at 45 degrees or less. The only overhang left is the
+inside of the back wall, which bridges between the side walls and any
+`divisions_x` dividers. The bridge sag is on the inside of the bin, so it does not
+touch the snap face. Keep each bridge under about 60 mm, by adding dividers if
+needed, or tune your slicer's bridge settings.
+
+Printing the bin upright (floor on the bed) leaves a flat 6.8 mm cantilever under
+every snap, including the retaining nubs. That weakens the fit, so it is not
+recommended.
+
 ## Functions
 
 | Function | Returns |
@@ -82,6 +167,12 @@ you want to make boards rather than accessories.
 | `og_snap_depth(lite)` | How far a snap reaches in, 6.8 or 3.4 |
 | `og_span(n)` | Outer size of `n` cells, `n * 28` |
 | `og_grid_positions(cols, rows)` | `[x, y]` cell centres, patch centred on origin |
+| `og_bin_width(cols, clearance)` | Outer width of a bin covering `cols` cells, `cols * 28 - clearance` |
+| `og_cols_for(mm, clearance)` | Fewest columns for an outer width of at least `mm` |
+| `og_cols_for_inner(mm, wall, clearance)` | Fewest columns for an inner width of at least `mm` |
+| `og_bin_rows(height)` | Full grid rows a bin of this height covers |
+| `og_bin_snap_cols(cols, spacing)` | Snap column indices used by `opengrid_bin()` |
+| `og_bin_snap_positions(cols, height, spacing, snap_rows, snap_cols)` | `[x, y]` snap centres in bin coordinates |
 
 ---
 
@@ -198,6 +289,7 @@ examples/
   opengrid_snap_example.scad         -- snaps on their own
   opengrid_tile_example.scad         -- a snap seated in a tile, sectioned
   opengrid_plate_example.scad        -- snaps on a tall two-row backplate
+  opengrid_bin_example.scad          -- odd and even width bins side by side on a board
 images/                              -- rendered previews
 ```
 
@@ -236,4 +328,4 @@ This library is MIT licensed. See [LICENSE](LICENSE).
 
 ## Versioning
 
-[Semantic Versioning 2.0.0](https://semver.org).
+[Semantic Versioning 2.0.0](https://semver.org). See [CHANGELOG.md](CHANGELOG.md).
